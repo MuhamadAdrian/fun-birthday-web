@@ -37,6 +37,8 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // Improvement: jangan precache emulate assets XR yang besar (2-3MB) kalau tidak dipakai
+        globIgnores: ['**/emulate-*.js', '**/office_*.js', '**/living_*.js', '**/music_*.js', '**/meeting_*.js'],
         runtimeCaching: [
           {
             urlPattern: /^.*\/models\/.*\.glb$/,

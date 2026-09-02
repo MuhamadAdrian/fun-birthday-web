@@ -29,6 +29,7 @@ export function ARCanvas({
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [cameraLoading, setCameraLoading] = useState(false)
   const [placedPos, setPlacedPos] = useState<{ x: number; y: number } | null>(null)
+  const [parallax, setParallax] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
 
   useEffect(() => {
     let mounted = true
@@ -192,20 +193,65 @@ export function ARCanvas({
     return () => stopCamera()
   }, [])
 
+  // World-locked illusion: pakai deviceorientation untuk parallax biar kue tidak 100% nempel layar
+  useEffect(() => {
+    if (!placed || !isPresenting) {
+      setParallax({ x: 0, y: 0 })
+      return
+    }
+    let raf = 0
+    const handler = (e: DeviceOrientationEvent) => {
+      const gamma = e.gamma ?? 0
+      const beta = e.beta ?? 0
+      // beta ~45° saat phone dipegang 45° ke lantai, gamma 0 center
+      const targetX = Math.max(-18, Math.min(18, -gamma * 0.9))
+      const targetY = Math.max(-14, Math.min(14, -(beta - 45) * 0.5))
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => setParallax({ x: targetX, y: targetY }))
+    }
+    // iOS perlu permission, Android langsung
+    const maybeRequest = async () => {
+      try {
+        const DME = (DeviceMotionEvent as any)
+        if (DME && typeof DME.requestPermission === 'function') {
+          const perm = await DME.requestPermission().catch(() => 'denied')
+          if (perm !== 'granted') return
+        }
+      } catch {}
+      window.addEventListener('deviceorientation', handler, true)
+    }
+    maybeRequest()
+    window.addEventListener('deviceorientation', handler, true)
+    return () => {
+      window.removeEventListener('deviceorientation', handler as any, true)
+      cancelAnimationFrame(raf)
+      setParallax({ x: 0, y: 0 })
+    }
+  }, [placed, isPresenting])
+
   const handleTapPlace = (e?: React.MouseEvent | React.TouchEvent) => {
     if (coaching) return
-    // hitung posisi tap relatif ke ar-camera untuk penempatan yang akurat
+    // AR yang benar: kue ditempel di titik reticle (tengah layar) yang sudah hit-test ke lantai.
+    // Tap di mana saja tetap letakkan di tengah agar tidak kepotong & terasa world-anchored.
+    // Kalau mau presisi tap, kita tetap hitung tapi clamp ketat agar tidak overflow.
     if (e && cameraRef.current) {
       const rect = cameraRef.current.getBoundingClientRect()
-      const clientX = 'touches' in e ? e.touches[0]?.clientX ?? (e as any).changedTouches?.[0]?.clientX : (e as React.MouseEvent).clientX
-      const clientY = 'touches' in e ? e.touches[0]?.clientY ?? (e as any).changedTouches?.[0]?.clientY : (e as React.MouseEvent).clientY
+      const clientX = 'touches' in e ? (e.touches[0]?.clientX ?? (e as any).changedTouches?.[0]?.clientX) : (e as React.MouseEvent).clientX
+      const clientY = 'touches' in e ? (e.touches[0]?.clientY ?? (e as any).changedTouches?.[0]?.clientY) : (e as React.MouseEvent).clientY
       if (clientX != null && clientY != null) {
         const x = ((clientX - rect.left) / rect.width) * 100
         const y = ((clientY - rect.top) / rect.height) * 100
-        // clamp ke area aman 15-85% biar kue tidak kepotong tepi
-        const clampedX = Math.min(85, Math.max(15, x))
-        const clampedY = Math.min(80, Math.max(20, y))
-        setPlacedPos({ x: clampedX, y: clampedY })
+        // clamp ketat 30-70% X dan 35-75% Y untuk cegah kepotong overflow hidden (260px di layar 360px butuh margin ~36%)
+        const clampedX = Math.min(70, Math.max(30, x))
+        const clampedY = Math.min(75, Math.max(35, y))
+        // Untuk kesan AR world-locked, kita lebih suka center reticle jika tap jauh dari tengah (>20% delta)
+        // tapi tetap hormati tap yang dekat tengah agar terasa interaktif
+        const distFromCenter = Math.hypot(clampedX - 50, clampedY - 62)
+        if (distFromCenter > 22) {
+          setPlacedPos({ x: 50, y: 62 })
+        } else {
+          setPlacedPos({ x: clampedX, y: clampedY })
+        }
       } else {
         setPlacedPos({ x: 50, y: 62 })
       }
@@ -224,7 +270,7 @@ export function ARCanvas({
   }
 
   const handlePlacedMove = (e: React.MouseEvent | React.TouchEvent) => {
-    // drag kue setelah ditempatkan — update pos
+    // drag kue setelah ditempatkan — update pos dengan clamp ketat anti kepotong
     e.stopPropagation()
     if (!cameraRef.current || !placed) return
     const rect = cameraRef.current.getBoundingClientRect()
@@ -232,7 +278,7 @@ export function ARCanvas({
     const clientY = 'touches' in e ? e.touches[0]?.clientY : (e as React.MouseEvent).clientY
     const x = ((clientX - rect.left) / rect.width) * 100
     const y = ((clientY - rect.top) / rect.height) * 100
-    setPlacedPos({ x: Math.min(85, Math.max(15, x)), y: Math.min(80, Math.max(15, y)) })
+    setPlacedPos({ x: Math.min(70, Math.max(30, x)), y: Math.min(75, Math.max(35, y)) })
   }
 
   // Fallback 3D viewer + Simulasi AR untuk unsupported
@@ -302,19 +348,20 @@ export function ARCanvas({
     return (
       <div className="ar-presenting" onClick={handleTapPlace} onTouchEnd={handleTapPlace}>
         <div className="ar-camera" ref={cameraRef}>
-          {/* Kamera asli */}
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="ar-video"
-            style={{ display: cameraError ? 'none' : 'block' }}
-          />
-          {/* Fallback gradient kalau kamera gagal */}
-          {cameraError && <div className="ar-camera-fallback" />}
-          <div className="ar-grid" />
-          <div className="ar-vignette" />
+          {/* Video dibungkus agar overflow hidden tidak kepotong kue */}
+          <div className="ar-video-wrap">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="ar-video"
+              style={{ display: cameraError ? 'none' : 'block' }}
+            />
+            {cameraError && <div className="ar-camera-fallback" />}
+            <div className="ar-grid" />
+            <div className="ar-vignette" />
+          </div>
           {cameraLoading && <div className="camera-loading">Menyalakan kamera...</div>}
           {cameraError && !cameraLoading && (
             <div className="camera-error">
@@ -346,6 +393,7 @@ export function ARCanvas({
               style={{
                 left: `${placedPos?.x ?? 50}%`,
                 top: `${placedPos?.y ?? 62}%`,
+                transform: `translate(-50%, -50%) translate(${parallax.x}px, ${parallax.y}px)`,
               }}
               onClick={(e) => e.stopPropagation()}
               onMouseDown={(e) => e.stopPropagation()}
@@ -391,17 +439,18 @@ export function ARCanvas({
           )}
         </div>
         <style>{`
-          .ar-presenting{ position:relative; border-radius: var(--radius-lg); overflow:hidden; background:#0a0a0a; box-shadow: var(--shadow-bakery-lg); border:2px solid #fff; }
-          .ar-camera{ position:relative; height:480px; background: #0a0a0a; overflow:hidden; display:grid; place-items:center; touch-action:none; }
+          .ar-presenting{ position:relative; border-radius: var(--radius-lg); overflow:visible; background:#0a0a0a; box-shadow: var(--shadow-bakery-lg); border:2px solid #fff; }
+          .ar-camera{ position:relative; height:480px; background: #0a0a0a; overflow:visible; display:grid; place-items:center; touch-action:none; border-radius: var(--radius-lg); }
           @media(max-width:600px){ .ar-camera{ height:420px; } }
+          .ar-video-wrap{ position:absolute; inset:0; overflow:hidden; border-radius: var(--radius-lg); }
           .ar-video{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
           .ar-camera-fallback{ position:absolute; inset:0; background: linear-gradient(180deg, #2a2a2a 0%, #1a1a1a 100%); }
-          .camera-loading{ position:absolute; top:12px; left:50%; transform:translateX(-50%); background: rgba(0,0,0,0.7); color:#fff; font:600 12px var(--font-body); padding:6px 12px; border-radius:999px; }
-          .camera-error{ position:absolute; top:12px; left:12px; right:12px; background: rgba(230,57,70,0.92); color:#fff; padding:8px 10px; border-radius:12px; text-align:center; }
+          .camera-loading{ position:absolute; top:12px; left:50%; transform:translateX(-50%); background: rgba(0,0,0,0.7); color:#fff; font:600 12px var(--font-body); padding:6px 12px; border-radius:999px; z-index:4; }
+          .camera-error{ position:absolute; top:12px; left:12px; right:12px; background: rgba(230,57,70,0.92); color:#fff; padding:8px 10px; border-radius:12px; text-align:center; z-index:4; }
           .camera-error-title{ font:700 12px var(--font-body); }
           .camera-error-sub{ font:500 11px var(--font-body); opacity:.9; margin-top:2px; }
           .ar-grid{ position:absolute; inset:0; background-image: radial-gradient(rgba(255,255,255,0.08) 1px, transparent 1px); background-size: 24px 24px; pointer-events:none; }
-          .ar-vignette{ position:absolute; inset:0; box-shadow: inset 0 0 120px rgba(0,0,0,0.6); pointer-events:none; }
+          .ar-vignette{ position:absolute; inset:0; box-shadow: inset 0 0 120px rgba(0,0,0,0.6); pointer-events:none; border-radius: var(--radius-lg); }
           .reticle{ width:80px; height:80px; border:2px solid #fff; border-radius:50%; position:relative; box-shadow: 0 0 0 1px rgba(0,0,0,0.2), 0 2px 12px rgba(0,0,0,0.3); z-index:2; }
           .reticle::before{ content:''; position:absolute; inset:18px; border:1px solid rgba(255,255,255,0.9); border-radius:50%; }
           .reticle::after{ content:''; position:absolute; top:50%; left:50%; width:6px; height:6px; background:#fff; border-radius:50%; transform: translate(-50%,-50%); }
@@ -412,11 +461,12 @@ export function ARCanvas({
           .coaching-sub{ font: 500 12px var(--font-body); color: rgba(58,42,26,0.7); margin-top:2px; }
           .coaching-spinner{ width:18px; height:18px; border:2px solid var(--color-cream-dark); border-top-color: var(--color-cherry); border-radius:50%; animation: spin .8s linear infinite; margin:8px auto 0; }
           @keyframes spin{ to{ transform: rotate(360deg);} }
-          .placed-canvas{ position:absolute; width: 260px; height: 260px; transform: translate(-50%, -50%); z-index:2; cursor: grab; filter: drop-shadow(0 12px 24px rgba(0,0,0,0.35)); }
+          .placed-canvas{ position:absolute; width: 240px; height: 240px; transform: translate(-50%, -50%); z-index:5; cursor: grab; filter: drop-shadow(0 12px 24px rgba(0,0,0,0.35)); overflow:visible; }
+          @media(max-width:600px){ .placed-canvas{ width: 200px; height: 200px; } }
           .placed-canvas:active{ cursor: grabbing; }
-          .placed-canvas-inner{ width:100%; height:100%; background: transparent; border-radius: 16px; overflow:hidden; }
-          .placed-canvas-inner canvas{ width:100% !important; height:100% !important; display:block; }
-          .placed-label{ position:absolute; bottom:-22px; left:50%; transform:translateX(-50%); white-space:nowrap; background: rgba(0,0,0,0.65); color:#fff; font:600 10px var(--font-body); padding:4px 8px; border-radius:999px; pointer-events:none; }
+          .placed-canvas-inner{ width:100%; height:100%; background: transparent; border-radius: 16px; overflow:visible; }
+          .placed-canvas-inner canvas{ width:100% !important; height:100% !important; display:block; overflow:visible !important; filter: none; }
+          .placed-label{ position:absolute; bottom:-22px; left:50%; transform:translateX(-50%); white-space:nowrap; background: rgba(0,0,0,0.65); color:#fff; font:600 10px var(--font-body); padding:4px 8px; border-radius:999px; pointer-events:none; z-index:6; }
           .tracking-warn{ position:absolute; top:16px; left:50%; transform:translateX(-50%); background: #E63946; color:#fff; font:700 12px var(--font-body); padding:8px 14px; border-radius:999px; }
           .ar-controls{ display:flex; gap:10px; align-items:center; justify-content:space-between; padding:12px; background:#fff; }
           .ar-hint{ font: 500 11px var(--font-mono); color: rgba(58,42,26,0.6); }

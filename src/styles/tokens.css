@@ -1,0 +1,63 @@
+/* Design Tokens — AR Happy Birthday (frontend-design skill)
+   Palette: Bakery — avoid generik cream/terracotta & near-black/acid-green */
+:root {
+  --color-cream: #FFF8E7;
+  --color-cherry: #E63946;
+  --color-chocolate: #3A2A1A;
+  --color-sprinkle: #FF8FAB;
+  --color-mint: #A8E6CF;
+  --color-gold: #FFD23F;
+  --color-cream-dark: #F5EBD0;
+
+  --bg: var(--color-cream);
+  --text: var(--color-chocolate);
+  --primary: var(--color-cherry);
+  --accent: var(--color-sprinkle);
+  --success: var(--color-mint);
+  --highlight: var(--color-gold);
+
+  --shadow-bakery: 0 8px 24px rgba(58,42,26,0.12);
+  --shadow-bakery-lg: 0 16px 40px rgba(58,42,26,0.16);
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-pill: 999px;
+
+  --font-display: 'Bricolage Grotesque', 'Baloo 2', system-ui, sans-serif;
+  --font-body: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 24px;
+  --text-2xl: 32px;
+  --text-3xl: 44px;
+}
+
+/* Base */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--font-body); }
+body { -webkit-font-smoothing: antialiased; }
+
+/* Focus */
+:focus-visible { outline: 2px solid var(--color-cherry); outline-offset: 2px; }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* Scrollbar bakery */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--color-sprinkle); border-radius: 999px; }
+::-webkit-scrollbar-track { background: var(--color-cream-dark); }
+
+/* Utilities */
+.sprinkle-divider {
+  height: 6px;
+  background: repeating-linear-gradient(90deg, var(--color-sprinkle) 0 12px, var(--color-mint) 12px 24px, var(--color-gold) 24px 36px, transparent 36px 40px);
+  border-radius: 999px;
+  opacity: 0.8;
+}

@@ -1,5 +1,5 @@
 import { Canvas } from '@react-three/fiber'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CakeModel } from './CakeModel'
 import type { CakeDefinition } from '../data/cakes'
 
@@ -21,21 +21,70 @@ export function ARCanvas({
   const [coaching, setCoaching] = useState(true)
   const [trackingLost, setTrackingLost] = useState(false)
   const [isPresenting, setIsPresenting] = useState(false)
+  const [checkReason, setCheckReason] = useState<string>('')
+  const [hasRealSupport, setHasRealSupport] = useState(false)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const [cameraError, setCameraError] = useState<string | null>(null)
+  const [cameraLoading, setCameraLoading] = useState(false)
 
   useEffect(() => {
     let mounted = true
     async function check() {
       // @ts-ignore
       const nav = navigator as any
+      const isSecure = window.isSecureContext
+      const ua = navigator.userAgent
+
+      // Debug log for Android Chrome
+      console.log('[AR] check start', { isSecure, hasXR: !!nav.xr, ua })
+
+      if (!isSecure) {
+        // WebXR requires HTTPS — but we still allow simulation
+        if (mounted) {
+          setArState('unsupported')
+          setHasRealSupport(false)
+          setCheckReason('Butuh HTTPS untuk WebXR asli (kamu di HTTP). Simulasi tetap bisa dicoba.')
+        }
+        return
+      }
+
       if (nav.xr?.isSessionSupported) {
         try {
           const supported = await nav.xr.isSessionSupported('immersive-ar')
-          if (mounted) setArState(supported ? 'supported' : 'unsupported')
-        } catch {
-          if (mounted) setArState('unsupported')
+          console.log('[AR] isSessionSupported immersive-ar:', supported)
+          if (mounted) {
+            setArState(supported ? 'supported' : 'unsupported')
+            setHasRealSupport(!!supported)
+            setCheckReason(
+              supported
+                ? '✅ Perangkat support immersive-ar'
+                : 'Perangkat/browser tidak support immersive-ar (cek ARCore / Chrome update). Simulasi tetap bisa.',
+            )
+          }
+        } catch (e) {
+          console.warn('[AR] isSessionSupported error', e)
+          if (mounted) {
+            setArState('unsupported')
+            setHasRealSupport(false)
+            setCheckReason(`Gagal cek AR: ${(e as Error)?.message || 'unknown'}. Simulasi tetap bisa.`)
+          }
         }
       } else {
-        if (mounted) setArState('unsupported')
+        console.warn('[AR] navigator.xr tidak ada')
+        if (mounted) {
+          setArState('unsupported')
+          setHasRealSupport(false)
+          const isAndroid = /Android/i.test(ua)
+          const isChrome = /Chrome/i.test(ua)
+          if (isAndroid && !isChrome) {
+            setCheckReason('Pakai Chrome Android untuk AR asli. Simulasi tetap bisa dicoba.')
+          } else if (isAndroid) {
+            setCheckReason('ARCore belum aktif / Chrome perlu update. Simulasi tetap bisa.')
+          } else {
+            setCheckReason('Browser tidak support WebXR. Simulasi tetap bisa.')
+          }
+        }
       }
     }
     check()
@@ -46,29 +95,98 @@ export function ARCanvas({
 
   // Simulate WebXR hit-test for demo: show coaching then allow place on tap
   useEffect(() => {
-    if (arState === 'supported' && isPresenting) {
+    if (isPresenting) {
       const t = setTimeout(() => setCoaching(false), 1800)
       return () => clearTimeout(t)
     }
-  }, [arState, isPresenting])
+  }, [isPresenting])
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop())
+      streamRef.current = null
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null
+    }
+  }
 
   const handleEnterAR = async () => {
     // In real WebXR, would call navigator.xr.requestSession.
-    // For MVP without physical device testing, simulate AR overlay.
+    // For MVP tanpa WebXR nyata, kita pakai kamera getUserMedia sebagai background AR simulasi
+    setCameraError(null)
+    setCameraLoading(true)
     setIsPresenting(true)
     setArState('presenting')
     setPlaced(false)
     setCoaching(true)
-    // Simulate tracking
     setTrackingLost(false)
+
+    // Coba nyalakan kamera belakang (environment)
+    try {
+      // getUserMedia butuh HTTPS — di HTTP akan throw
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Browser tidak support getUserMedia')
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      })
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        await videoRef.current.play().catch(() => {})
+      }
+      setCameraError(null)
+      console.log('[AR] camera started', stream.getVideoTracks()[0]?.label)
+    } catch (e) {
+      console.warn('[AR] camera gagal', e)
+      const msg = (e as Error)?.name === 'NotAllowedError'
+        ? 'Izin kamera ditolak — aktifkan izin kamera di Chrome.'
+        : (e as Error)?.name === 'NotFoundError'
+          ? 'Kamera tidak ditemukan.'
+          : (e as Error)?.message?.includes('secure')
+            ? 'Butuh HTTPS untuk akses kamera. Simulasi tetap jalan tanpa kamera.'
+            : (e as Error)?.message || 'Gagal akses kamera, simulasi tanpa kamera.'
+      // Khusus HTTP insecure, browser block getUserMedia
+      if (!window.isSecureContext) {
+        setCameraError('Butuh HTTPS untuk kamera. Buka via https:// atau localhost. Simulasi grid tetap jalan.')
+      } else {
+        setCameraError(msg)
+      }
+    } finally {
+      setCameraLoading(false)
+    }
+
+    // Kalau hasRealSupport, log aja (belum pakai immersive-ar beneran)
+    if (hasRealSupport) {
+      console.log('[AR] hasRealSupport true — pakai kamera simulasi, belum WebXR hit-test')
+    }
   }
 
   const handleExitAR = () => {
+    stopCamera()
+    setCameraError(null)
+    setCameraLoading(false)
     setIsPresenting(false)
-    setArState('supported')
+    // restore previous state (supported vs unsupported) instead of always 'supported'
+    setArState(hasRealSupport ? 'supported' : 'unsupported')
     setPlaced(false)
     onPlaced?.(false)
   }
+
+  // attach stream to video when ref ready / presenting
+  useEffect(() => {
+    if (isPresenting && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current
+      videoRef.current.play().catch(() => {})
+    }
+  }, [isPresenting])
+
+  // cleanup on unmount
+  useEffect(() => {
+    return () => stopCamera()
+  }, [])
 
   const handleTapPlace = () => {
     if (coaching) return
@@ -82,11 +200,14 @@ export function ARCanvas({
     onPlaced?.(false)
   }
 
-  // Fallback 3D viewer
+  // Fallback 3D viewer + Simulasi AR untuk unsupported
   if (arState === 'unsupported' || arState === 'checking') {
+    const isChecking = arState === 'checking'
     return (
       <div className="ar-fallback">
-        <div className="fallback-badge">Mode 3D — AR penuh di Android Chrome</div>
+        <div className="fallback-badge">
+          {isChecking ? 'Mengecek AR...' : hasRealSupport ? 'Mode 3D' : 'Mode 3D — AR Simulasi Tersedia ✨'}
+        </div>
         <div className="fallback-canvas">
           <Canvas camera={{ position: [0, 1.1, 2.6], fov: 45 }} shadows>
             <ambientLight intensity={0.9} />
@@ -98,24 +219,74 @@ export function ARCanvas({
             </mesh>
           </Canvas>
         </div>
-        {arState === 'checking' ? <p className="muted">Mengecek dukungan AR...</p> : null}
+        {isChecking ? (
+          <p className="muted">Mengecek dukungan AR... (butuh HTTPS & Chrome Android + ARCore)</p>
+        ) : (
+          <div className="fallback-actions">
+            <p className="fallback-reason">{checkReason || 'AR asli butuh Chrome Android + HTTPS + ARCore.'}</p>
+            <button className="btn primary large" onClick={handleEnterAR}>
+              Lihat di Dunia Nyata (Simulasi) →
+            </button>
+            <p className="fallback-hint">
+              Simulasi ini jalan di semua HP. Untuk AR asli (kamera beneran) buka via <b>HTTPS</b> di Chrome Android yang sudah install Google Play Services for AR.
+            </p>
+            <details className="fallback-details">
+              <summary>🔍 Diagnosis</summary>
+              <div className="fallback-diag">
+                <div>SecureContext: {String(window.isSecureContext)}</div>
+                <div>Protocol: {window.location.protocol}</div>
+                <div>Has navigator.xr: {String(!!(navigator as any).xr)}</div>
+                <div>UserAgent: {navigator.userAgent.slice(0, 80)}...</div>
+                <div>Reason: {checkReason}</div>
+              </div>
+            </details>
+          </div>
+        )}
         <style>{`
           .ar-fallback{ background:#fff; border-radius: var(--radius-lg); overflow:hidden; box-shadow: var(--shadow-bakery); border:2px solid #fff; }
           .fallback-badge{ background: var(--color-mint); color: var(--color-chocolate); font:700 12px var(--font-body); text-align:center; padding:8px; }
           .fallback-canvas{ height:380px; background: radial-gradient(120% 120% at 50% 0%, #FFF8E7 0%, #F5EBD0 100%); }
-          .muted{ text-align:center; font: 500 12px var(--font-mono); color: rgba(58,42,26,0.6); padding:8px; margin:0; }
+          .muted{ text-align:center; font: 500 12px var(--font-mono); color: rgba(58,42,26,0.6); padding:10px; margin:0; }
+          .fallback-actions{ padding:14px 16px 16px; text-align:center; display:flex; flex-direction:column; gap:10px; }
+          .fallback-reason{ font: 500 12px var(--font-body); color: rgba(58,42,26,0.75); margin:0; line-height:1.5; background: var(--color-cream-dark); padding:8px 10px; border-radius:10px; }
+          .fallback-hint{ font: 500 11px var(--font-mono); color: rgba(58,42,26,0.55); margin:0; line-height:1.5; }
+          .fallback-details{ text-align:left; background: #fff; border:1px solid #eee; border-radius:10px; padding:8px 10px; }
+          .fallback-details summary{ font: 700 11px var(--font-body); cursor:pointer; color: var(--color-chocolate); }
+          .fallback-diag{ font: 500 10px var(--font-mono); color: rgba(58,42,26,0.7); margin-top:6px; display:flex; flex-direction:column; gap:2px; word-break:break-all; }
+          .btn{ font:700 13px var(--font-body); padding:10px 16px; border-radius:999px; border:none; cursor:pointer; transition: all .15s; }
+          .btn.primary{ background: var(--color-cherry); color:#fff; box-shadow: 0 6px 16px rgba(230,57,70,0.3); }
+          .btn.primary:hover{ background:#d5303e; transform: translateY(-1px); }
+          .btn.large{ width:100%; padding:14px 22px; font-size:15px; }
         `}</style>
       </div>
     )
   }
 
-  // Simulated AR presenting overlay (camera feed placeholder)
+  // Simulated AR presenting overlay — sekarang pakai kamera beneran via getUserMedia
   if (isPresenting) {
     return (
       <div className="ar-presenting" onClick={handleTapPlace}>
         <div className="ar-camera">
+          {/* Kamera asli */}
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="ar-video"
+            style={{ display: cameraError ? 'none' : 'block' }}
+          />
+          {/* Fallback gradient kalau kamera gagal */}
+          {cameraError && <div className="ar-camera-fallback" />}
           <div className="ar-grid" />
           <div className="ar-vignette" />
+          {cameraLoading && <div className="camera-loading">Menyalakan kamera...</div>}
+          {cameraError && !cameraLoading && (
+            <div className="camera-error">
+              <div className="camera-error-title">⚠️ {cameraError}</div>
+              <div className="camera-error-sub">Tap tetap bisa letakkan kue (mode simulasi).</div>
+            </div>
+          )}
           {!placed ? (
             <>
               <div className={`reticle ${coaching ? 'searching' : ''}`} />
@@ -159,9 +330,15 @@ export function ARCanvas({
         </div>
         <style>{`
           .ar-presenting{ position:relative; border-radius: var(--radius-lg); overflow:hidden; background:#0a0a0a; box-shadow: var(--shadow-bakery-lg); border:2px solid #fff; }
-          .ar-camera{ position:relative; height:480px; background: linear-gradient(180deg, #2a2a2a 0%, #1a1a1a 100%); overflow:hidden; display:grid; place-items:center; }
+          .ar-camera{ position:relative; height:480px; background: #0a0a0a; overflow:hidden; display:grid; place-items:center; }
           @media(max-width:600px){ .ar-camera{ height:420px; } }
-          .ar-grid{ position:absolute; inset:0; background-image: radial-gradient(rgba(255,255,255,0.08) 1px, transparent 1px); background-size: 24px 24px; }
+          .ar-video{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+          .ar-camera-fallback{ position:absolute; inset:0; background: linear-gradient(180deg, #2a2a2a 0%, #1a1a1a 100%); }
+          .camera-loading{ position:absolute; top:12px; left:50%; transform:translateX(-50%); background: rgba(0,0,0,0.7); color:#fff; font:600 12px var(--font-body); padding:6px 12px; border-radius:999px; }
+          .camera-error{ position:absolute; top:12px; left:12px; right:12px; background: rgba(230,57,70,0.92); color:#fff; padding:8px 10px; border-radius:12px; text-align:center; }
+          .camera-error-title{ font:700 12px var(--font-body); }
+          .camera-error-sub{ font:500 11px var(--font-body); opacity:.9; margin-top:2px; }
+          .ar-grid{ position:absolute; inset:0; background-image: radial-gradient(rgba(255,255,255,0.08) 1px, transparent 1px); background-size: 24px 24px; pointer-events:none; }
           .ar-vignette{ position:absolute; inset:0; box-shadow: inset 0 0 120px rgba(0,0,0,0.6); pointer-events:none; }
           .reticle{ width:80px; height:80px; border:2px solid #fff; border-radius:50%; position:relative; box-shadow: 0 0 0 1px rgba(0,0,0,0.2), 0 2px 12px rgba(0,0,0,0.3); }
           .reticle::before{ content:''; position:absolute; inset:18px; border:1px solid rgba(255,255,255,0.9); border-radius:50%; }

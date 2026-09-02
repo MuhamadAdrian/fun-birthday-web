@@ -296,43 +296,36 @@ export function ARCanvas({
 
   return (
     <div className="ar-root">
-      {/* Entry UI — sebelum masuk AR */}
-      {!isARMode && !xrSessionActive && (
+      {/* Entry UI — sebelum masuk AR, tampil di atas preview */}
+      {!xrSessionActive && (
         <div className="ar-entry">
-          <div className="ar-entry-preview">
-            <Canvas
-              camera={{ position: [0, 1.1, 2.6], fov: 45 }}
-              shadows
-              gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
-              style={{ background: "transparent" }}
-            >
-              <FallbackScene cake={cake} name={name} candleLit={candleLit} />
-            </Canvas>
-          </div>
           <div className="ar-entry-actions">
-            <div className={`ar-ready ${arSupported ? "" : "ar-ready-warn"}`}>{arSupported ? "AR Siap ✨" : arSupported === false ? "Mode 3D" : "Mengecek AR..."}</div>
+            <div className={`ar-ready ${arSupported ? "" : "ar-ready-warn"}`}>{arSupported ? "AR Siap ✨" : arSupported === false ? "Mode 3D — Simulasi" : "Mengecek AR..."}</div>
             <p className="ar-desc">
-              {arSupported ? "Letakkan kue di lantai/meja dunia nyata — deteksi permukaan otomatis." : "AR asli butuh Chrome Android + HTTPS + ARCore. Tetap bisa lihat 3D & coba simulasi."}
+              {arSupported ? "Letakkan kue di lantai/meja dunia nyata — deteksi permukaan otomatis (world-locked)." : "AR asli butuh Chrome Android + HTTPS + ARCore. Tetap bisa lihat 3D preview di bawah."}
             </p>
             {checkReason && <p className="ar-reason">{checkReason}</p>}
             <button
-              className={`btn primary large ${arSupported === false ? "btn-disabled" : ""}`}
+              className="btn primary large"
               onClick={async () => {
+                // Pastikan Canvas XR sudah mount sebelum enterAR — delay 60ms untuk React commit
                 setIsARMode(true)
+                await new Promise((r) => setTimeout(r, 60))
                 try {
                   await xrStore.enterAR()
-                } catch (e) {
+                } catch (e: any) {
                   console.warn("enterAR gagal", e)
-                  // fallback: tetap masuk mode AR simulasi (akan render fallback jika session tidak terbentuk)
-                  // Jika gagal, biar Canvas tetap fallback
                   setIsARMode(false)
-                  alert("Gagal masuk AR: " + (e as Error).message + "\n\nPastikan HTTPS, Chrome Android, & ARCore terinstall.")
+                  const msg = e?.message?.includes("not connected") || e?.message?.includes("XR")
+                    ? "XR belum siap — coba tap lagi. Pastikan Canvas sudah load & pakai HTTPS di Chrome Android."
+                    : e?.message || "unknown"
+                  alert("Gagal Masuk AR: " + msg + "\n\nPastikan https, Chrome Android & ARCore terinstall. Fallback 3D tetap bisa dipakai.")
                 }
               }}
             >
-              {arSupported ? "Lihat di Dunia Nyata →" : "Coba AR (jika support) →"}
+              {arSupported ? "Lihat di Dunia Nyata →" : "Coba AR →"}
             </button>
-            <div className="ar-note">Di iPhone / tanpa ARCore akan otomatis fallback ke 3D interaktif (tidak kepotong, full visible).</div>
+            <div className="ar-note">{arSupported ? "Kue akan world-locked, tidak ikut layar, tidak kepotong." : "Di iPhone / tanpa ARCore akan fallback ke 3D interaktif full visible."}</div>
             {arSupported === false && (
               <details className="ar-diag">
                 <summary>🔍 Diagnosis</summary>
@@ -344,8 +337,8 @@ export function ARCanvas({
         </div>
       )}
 
-      {/* XR Canvas — mount selalu, tapi transparan saat AR aktif; fallback tidak kepotong */}
-      <div className={`ar-xr-wrap ${isARMode || xrSessionActive ? "ar-xr-wrap--active" : "ar-xr-wrap--hidden"}`}>
+      {/* XR Canvas — SELALU MOUNT agar xrStore terhubung ke Three.js, jangan display:none */}
+      <div className={`ar-xr-wrap ${xrSessionActive ? "ar-xr-wrap--active" : "ar-xr-wrap--preview"}`}>
         <Canvas
           onCreated={(state) => {
             try {
@@ -394,9 +387,7 @@ export function ARCanvas({
 
       <style>{`
         .ar-root{ position:relative; width:100%; }
-        .ar-entry{ background:#fff; border-radius: var(--radius-lg); overflow:visible; box-shadow: var(--shadow-bakery); border:2px solid #fff; }
-        .ar-entry-preview{ height:380px; background: radial-gradient(120% 120% at 50% 0%, #FFF8E7 0%, #F5EBD0 100%); border-radius: var(--radius-lg); overflow:visible; position:relative; }
-        .ar-entry-preview canvas{ width:100% !important; height:100% !important; display:block; overflow:visible !important; }
+        .ar-entry{ background:#fff; border-radius: var(--radius-lg); overflow:visible; box-shadow: var(--shadow-bakery); border:2px solid #fff; margin-bottom:12px; }
         .ar-entry-actions{ padding:16px; text-align:center; }
         .ar-ready{ display:inline-block; background: var(--color-mint); color: var(--color-chocolate); font:800 12px var(--font-body); letter-spacing:.08em; text-transform:uppercase; padding:6px 12px; border-radius:999px; }
         .ar-ready-warn{ background: #ffe08a; }
@@ -410,13 +401,14 @@ export function ARCanvas({
         .btn.large{ padding:14px 24px; font-size:15px; width:100%; }
         .btn.ghost{ background: rgba(255,255,255,0.92); color: var(--color-chocolate); backdrop-filter: blur(8px); border:1px solid rgba(0,0,0,0.06); }
         .btn-disabled{ opacity:0.7; }
-        .ar-xr-wrap{ position:relative; width:100%; border-radius: var(--radius-lg); overflow:visible; margin-top:12px; }
-        .ar-xr-wrap--hidden{ display:none; }
-        .ar-xr-wrap--active{ display:block; position:fixed; inset:0; z-index: 40; background: transparent; border-radius:0; margin:0; }
+        .ar-xr-wrap{ position:relative; width:100%; border-radius: var(--radius-lg); overflow:visible; }
+        .ar-xr-wrap--preview{ display:block; height:420px; background: radial-gradient(120% 120% at 50% 0%, #FFF8E7 0%, #F5EBD0 100%); border:2px solid #fff; box-shadow: var(--shadow-bakery); overflow:visible; }
+        .ar-xr-wrap--preview canvas{ height:420px !important; }
+        .ar-xr-wrap--active{ display:block; position:fixed; inset:0; z-index: 40; background: transparent; border-radius:0; }
         .ar-xr-wrap--active canvas{ height:100vh !important; }
         .ar-xr-exit{ position:fixed; top:12px; right:12px; z-index:50; }
-        /* Fallback & XR canvas jangan kepotong */
-        .ar-xr-wrap canvas, .ar-entry-preview canvas{ overflow:visible !important; }
+        /* Canvas jangan kepotong — world-locked, bukan CSS overflow */
+        .ar-xr-wrap canvas{ overflow:visible !important; width:100% !important; height:100% !important; display:block; }
       `}</style>
     </div>
   )

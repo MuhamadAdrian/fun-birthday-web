@@ -184,7 +184,7 @@ export default function App() {
               </div>
             </div>
 
-            <ARCanvas cake={cake} name={name} candleLit={candleLit} />
+            <ARCanvas cake={cake} name={name} candleLit={candleLit} onBlow={handleBlow} />
 
             <BlowControls onBlow={handleBlow} candleLit={candleLit} />
 

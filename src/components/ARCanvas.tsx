@@ -30,29 +30,32 @@ interface PlacedCake {
 }
 
 // Improvement: memoize & tidak pernah re-render setelah place, fix world-locked (tidak ikut layar)
+// scale dinamis agar kue tidak terlalu besar & bisa diatur user
 function PlacedCakeModel({
   position,
   rotation,
   cake,
   name,
   candleLit,
+  scale = 0.6,
 }: {
   position: [number, number, number]
   rotation: [number, number, number]
   cake: CakeDefinition
   name: string
   candleLit: boolean
+  scale?: number
 }) {
-  // Empty deps = world anchored, tidak update saat kamera gerak
+  // Empty deps untuk pos/rot = world anchored, tapi scale ikut prop agar dinamis
   const fixedPos = useMemo<[number, number, number]>(() => [position[0], position[1] - 0.02, position[2]], [])
   const fixedRot = useMemo<[number, number, number]>(() => [rotation[0], rotation[1], rotation[2]], [])
   return (
-    <group position={fixedPos as any} rotation={fixedRot as any}>
+    <group position={fixedPos as any} rotation={fixedRot as any} scale={[scale, scale, scale] as any}>
       {/* wrapper group biar shadow & cake tidak kepotong overflow — world space, bukan CSS */}
       <CakeModel cake={cake} name={name} candleLit={candleLit} float={false} />
-      {/* Ground contact shadow — tipis, tidak menutupi video */}
+      {/* Ground contact shadow — tipis, tidak menutupi video, scale ikut kue */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.42, 0]} receiveShadow>
-        <planeGeometry args={[1.6, 1.6]} />
+        <planeGeometry args={[1.6 / scale, 1.6 / scale]} />
         <shadowMaterial opacity={0.28} />
       </mesh>
     </group>
@@ -65,12 +68,18 @@ function ARContent({
   candleLit,
   placedCake,
   onPlace,
+  onBlow,
+  cakeScale,
+  onScaleChange,
 }: {
   cake: CakeDefinition
   name: string
   candleLit: boolean
   placedCake: PlacedCake | null
   onPlace: (pos: [number, number, number], rot: [number, number, number]) => void
+  onBlow?: () => void
+  cakeScale: number
+  onScaleChange: (s: number) => void
 }) {
   const hitPositionRef = useRef<[number, number, number]>([0, 0, 0])
   const hitRotationRef = useRef<[number, number, number]>([0, 0, 0])
@@ -116,9 +125,9 @@ function ARContent({
         <HitTestPreview onHitTest={handleHitTest} visible={true} />
       )}
 
-      {/* Placed cake — world anchored, tidak ikut layar, tidak kepotong container */}
+      {/* Placed cake — world anchored, tidak ikut layar, tidak kepotong container, scale dinamis */}
       {placedCake && (
-        <PlacedCakeModel position={placedCake.position} rotation={placedCake.rotation} cake={cake} name={name} candleLit={candleLit} />
+        <PlacedCakeModel position={placedCake.position} rotation={placedCake.rotation} cake={cake} name={name} candleLit={candleLit} scale={cakeScale} />
       )}
 
       {/* AR lighting — terang agar kue tidak gelap di video */}
@@ -127,61 +136,56 @@ function ARContent({
       <directionalLight position={[-2, 3, -1]} intensity={0.5} />
       <hemisphereLight args={["#ffffff", "#444444", 0.6]} />
 
-      {/* DOM Overlay — tombol harus di dalam XRDomOverlay agar muncul di atas video AR (bukan CSS overlay biasa) */}
+      {/* DOM Overlay — pakai CSS custom (bukan Tailwind) agar styling muncul di XR overlay */}
       <XRDomOverlay>
-        <div className="fixed inset-0 pointer-events-none">
+        <div className="xr-overlay">
           {!placedCake && isInSession && (
-            <div className="fixed bottom-8 left-0 right-0 flex flex-col items-center gap-4 pointer-events-auto px-4">
+            <div className="xr-place-ui">
               {!hasValidHit && !hitTestFailed ? (
-                <div className="bg-black/70 px-5 py-3 rounded-2xl backdrop-blur-sm border border-white/10">
-                  <p className="text-white text-center text-sm font-medium">Arahkan kamera ke lantai atau meja</p>
-                  <p className="text-white/70 text-center text-xs mt-1">Gerakkan perlahan, tunggu reticle stabil</p>
+                <div className="xr-card xr-card--dark">
+                  <p className="xr-card-title">Arahkan kamera ke lantai atau meja</p>
+                  <p className="xr-card-sub">Gerakkan perlahan, tunggu reticle stabil</p>
                 </div>
               ) : hasValidHit ? (
-                <div className="bg-green-500/90 px-4 py-2 rounded-full backdrop-blur-sm border border-white/20 shadow-lg">
-                  <p className="text-white text-center text-sm font-bold">✓ Permukaan terdeteksi!</p>
-                </div>
+                <div className="xr-badge xr-badge--success">✓ Permukaan terdeteksi!</div>
               ) : (
-                <div className="bg-amber-500/90 px-4 py-2 rounded-full backdrop-blur-sm border border-white/20 shadow-lg">
-                  <p className="text-white text-center text-sm font-bold">⚠️ Hit-test tidak tersedia — kue akan ditaruh di depan kamera</p>
-                </div>
+                <div className="xr-badge xr-badge--warn">⚠️ Hit-test tidak tersedia — kue akan di depan kamera</div>
               )}
-              <button
-                onClick={handlePlaceCake}
-                disabled={false}
-                className={`rounded-full px-8 py-4 text-base font-bold shadow-xl transition-all flex items-center gap-2 ${
-                  hasValidHit || hitTestFailed ? "bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 active:scale-95 text-white" : "bg-gray-500/60 text-white/60 animate-pulse"
-                }`}
-              >
-                <span className="text-xl">🎂</span> {hasValidHit ? "Taruh Kue Disini" : hitTestFailed ? "Taruh Kue (Fallback)" : "Mencari permukaan..."}
+              <button onClick={handlePlaceCake} className={`btn xr-btn ${hasValidHit || hitTestFailed ? "primary" : "ghost"}`} style={{ opacity: hasValidHit || hitTestFailed ? 1 : 0.6 }}>
+                <span>🎂</span> {hasValidHit ? "Taruh Kue Disini" : hitTestFailed ? "Taruh Kue (Fallback)" : "Mencari permukaan..."}
               </button>
-              {!hasValidHit && !hitTestFailed && <p className="text-white/60 text-[11px] text-center max-w-[280px]">Pastikan ruangan terang & lantai bertekstur (jangan polos mengkilap)</p>}
+              {!hasValidHit && !hitTestFailed && <p className="xr-hint">Pastikan ruangan terang & lantai bertekstur</p>}
             </div>
           )}
           {placedCake && isInSession && (
-            <div className="fixed bottom-4 left-0 right-0 flex flex-col items-center gap-3 pointer-events-auto px-4">
-              <div className="bg-black/60 px-4 py-2 rounded-full backdrop-blur-md border border-white/10">
-                <p className="text-white text-xs font-medium text-center">✓ Kue tertanam di dunia nyata — gerakkan HP, kue tetap di tempat (world-locked)</p>
-              </div>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => {
-                    // reset — akan di-handle parent via onPlace null? kita trigger custom event
-                    window.dispatchEvent(new CustomEvent("ar-reset"))
-                  }}
-                  className="bg-white/90 hover:bg-white text-slate-800 rounded-full px-5 py-3 text-sm font-bold shadow-lg flex items-center gap-2"
-                >
-                  ↺ Pindah Kue
-                </button>
-                <button
-                  onClick={async () => {
-                    try { await (xrSession as any)?.end?.(); } catch {}
-                    try { await (xrStore as any).getState?.()?.session?.end?.() } catch {}
-                  }}
-                  className="bg-slate-800/80 hover:bg-slate-700 text-white rounded-full px-5 py-3 text-sm font-bold shadow-lg border border-white/10"
-                >
-                  Keluar AR
-                </button>
+            <div className="xr-placed-ui">
+              <div className="xr-card xr-card--dark xr-card--small">✓ Kue tertanam — gerakkan HP, kue tetap world-locked</div>
+              <div className="xr-controls">
+                <div className="xr-scale">
+                  <span className="xr-scale-label">Ukuran</span>
+                  <button className="btn ghost sm" onClick={() => onScaleChange(Math.max(0.35, cakeScale - 0.08))}>− Kecil</button>
+                  <span className="xr-scale-val">{Math.round(cakeScale * 100)}%</span>
+                  <button className="btn ghost sm" onClick={() => onScaleChange(Math.min(1.2, cakeScale + 0.08))}>+ Besar</button>
+                </div>
+                <div className="xr-actions">
+                  <button onClick={() => window.dispatchEvent(new CustomEvent("ar-reset"))} className="btn ghost">
+                    ↺ Pindah
+                  </button>
+                  {onBlow && (
+                    <button onClick={onBlow} disabled={!candleLit} className={`btn ${candleLit ? "primary" : "ghost"}`}>
+                      {candleLit ? "💨 Tiup Lilin" : "✓ Padam"}
+                    </button>
+                  )}
+                  <button
+                    onClick={async () => {
+                      try { await (xrSession as any)?.end?.(); } catch {}
+                      try { await (xrStore as any).getState?.()?.session?.end?.() } catch {}
+                    }}
+                    className="btn ghost"
+                  >
+                    ✕ Keluar
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -191,26 +195,28 @@ function ARContent({
   )
 }
 
-function FallbackScene({ cake, name, candleLit }: { cake: CakeDefinition; name: string; candleLit: boolean }) {
+function FallbackScene({ cake, name, candleLit, scale = 0.75 }: { cake: CakeDefinition; name: string; candleLit: boolean; scale?: number }) {
   return (
     <>
-      <PerspectiveCamera makeDefault position={[0.8, 0.9, 1.2]} fov={42} />
+      <PerspectiveCamera makeDefault position={[0.9, 1.0, 1.4]} fov={40} />
       <OrbitControls
         enablePan={false}
-        minDistance={0.5}
-        maxDistance={2.2}
+        minDistance={0.6}
+        maxDistance={2.4}
         target={[0, 0.05, 0]}
         minPolarAngle={0.2}
         maxPolarAngle={Math.PI / 2.05}
         autoRotate={!false}
-        autoRotateSpeed={0.7}
+        autoRotateSpeed={0.6}
       />
       <Environment preset="studio" background={false} />
-      <ambientLight intensity={0.7} />
+      <ambientLight intensity={0.8} />
       <directionalLight position={[3, 4, 2]} intensity={1.0} castShadow shadow-mapSize={1024} />
       <directionalLight position={[-2, 2, -1]} intensity={0.35} />
-      {/* Ground — tidak overflow hidden, full visible, shadow subtle */}
-      <CakeModel cake={cake} name={name} candleLit={candleLit} float={true} />
+      {/* Ground — tidak overflow hidden, full visible, shadow subtle, scale dinamis */}
+      <group scale={[scale, scale, scale]}>
+        <CakeModel cake={cake} name={name} candleLit={candleLit} float={true} />
+      </group>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.58, 0]} receiveShadow>
         <planeGeometry args={[4, 4]} />
         <shadowMaterial opacity={0.22} />
@@ -228,17 +234,20 @@ export function ARCanvas({
   name,
   candleLit,
   onPlaced,
+  onBlow,
 }: {
   cake: CakeDefinition
   name: string
   candleLit: boolean
   onPlaced?: (placed: boolean) => void
+  onBlow?: () => void
 }) {
   const [placedCake, setPlacedCake] = useState<PlacedCake | null>(null)
   const [arSupported, setArSupported] = useState<boolean | null>(null)
   const [checkReason, setCheckReason] = useState("")
   const [isARMode, setIsARMode] = useState(false)
   const [xrSessionActive, setXrSessionActive] = useState(false)
+  const [cakeScale, setCakeScale] = useState(0.62)
   // Fallback video AR untuk device yang tidak support WebXR hit-test (error not supported)
   const [videoFallback, setVideoFallback] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -347,6 +356,16 @@ export function ARCanvas({
               {arSupported ? "Letakkan kue di lantai/meja dunia nyata — deteksi permukaan otomatis (world-locked)." : "AR asli butuh Chrome Android + HTTPS + ARCore. Tetap bisa lihat 3D preview di bawah."}
             </p>
             {checkReason && <p className="ar-reason">{checkReason}</p>}
+            {/* Ukuran kue dinamis — bisa diatur sebelum masuk AR, biar tidak terlalu besar */}
+            <div className="ar-scale ar-scale--entry">
+              <span className="ar-scale-label">Ukuran kue</span>
+              <div className="ar-scale-row">
+                <button className="btn ghost sm" onClick={() => setCakeScale((s) => Math.max(0.35, s - 0.08))}>− Kecil</button>
+                <span className="ar-scale-val">{Math.round(cakeScale * 100)}%</span>
+                <button className="btn ghost sm" onClick={() => setCakeScale((s) => Math.min(1.15, s + 0.08))}>+ Besar</button>
+              </div>
+              <span className="ar-scale-hint">Geser sebelum masuk AR • di dalam AR juga bisa ubah</span>
+            </div>
             <button
               className="btn primary large"
               onClick={async () => {
@@ -440,7 +459,9 @@ export function ARCanvas({
                   <Canvas camera={{ position: [0, 0.7, 1.9], fov: 44 }} shadows gl={{ alpha: true, antialias: true }} style={{ background: "transparent" }}>
                     <ambientLight intensity={1} />
                     <directionalLight position={[2, 4, 2]} intensity={1.1} castShadow />
-                    <CakeModel cake={cake} name={name} candleLit={candleLit} float={false} />
+                    <group scale={[cakeScale, cakeScale, cakeScale]}>
+                      <CakeModel cake={cake} name={name} candleLit={candleLit} float={false} />
+                    </group>
                     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.42, 0]} receiveShadow>
                       <planeGeometry args={[1.8, 1.8]} />
                       <shadowMaterial opacity={0.28} />
@@ -451,22 +472,37 @@ export function ARCanvas({
             )}
           </div>
           <div className="ar-video-controls">
-            <button
-              className="btn ghost"
-              onClick={() => {
-                setVideoFallback(false)
-                setVideoPlaced(false)
-                stopVideo()
-              }}
-            >
-              ✕ Keluar Video
-            </button>
-            {videoPlaced && (
-              <button className="btn secondary" onClick={() => setVideoPlaced(false)}>
-                ↺ Pindah Kue
+            <div className="ar-scale ar-scale--video">
+              <span className="ar-scale-label">Ukuran</span>
+              <button className="btn ghost sm" onClick={(e) => { e.stopPropagation(); setCakeScale((s) => Math.max(0.35, s - 0.08)); }}>−</button>
+              <span className="ar-scale-val">{Math.round(cakeScale * 100)}%</span>
+              <button className="btn ghost sm" onClick={(e) => { e.stopPropagation(); setCakeScale((s) => Math.min(1.15, s + 0.08)); }}>+</button>
+            </div>
+            <div className="ar-video-actions">
+              <button
+                className="btn ghost"
+                onClick={() => {
+                  setVideoFallback(false)
+                  setVideoPlaced(false)
+                  stopVideo()
+                }}
+              >
+                ✕ Keluar Video
               </button>
-            )}
-            <span className="ar-hint">Fallback video — tidak world-locked, tapi tidak kepotong & tetap pakai kamera</span>
+              {videoPlaced && (
+                <>
+                  <button className="btn secondary" onClick={() => setVideoPlaced(false)}>
+                    ↺ Pindah
+                  </button>
+                  {onBlow && (
+                    <button onClick={onBlow} disabled={!candleLit} className={`btn ${candleLit ? "primary" : "ghost"}`}>
+                      {candleLit ? "💨 Tiup Lilin" : "✓ Padam"}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+            <span className="ar-hint">Fallback video — tap untuk pindah, tombol ukuran di atas</span>
           </div>
         </div>
       )}
@@ -492,9 +528,9 @@ export function ARCanvas({
           <Suspense fallback={null}>
             <XR store={xrStore}>
               {/* Saat session aktif, ARContent dengan hit-test world-locked. Saat tidak, tetap fallback agar tidak blank */}
-              <ARContent cake={cake} name={name} candleLit={candleLit} placedCake={placedCake} onPlace={handlePlace} />
+              <ARContent cake={cake} name={name} candleLit={candleLit} placedCake={placedCake} onPlace={handlePlace} onBlow={onBlow} cakeScale={cakeScale} onScaleChange={setCakeScale} />
               {/* FallbackScene selalu ada untuk non-XR, tapi di-hide saat XR aktif via NotInXR */}
-              {!xrSessionActive && <FallbackScene cake={cake} name={name} candleLit={candleLit} />}
+              {!xrSessionActive && <FallbackScene cake={cake} name={name} candleLit={candleLit} scale={cakeScale} />}
             </XR>
           </Suspense>
         </Canvas>
@@ -552,6 +588,30 @@ export function ARCanvas({
         .ar-video-el{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; border-radius: var(--radius-lg); }
         .ar-video-error{ position:absolute; top:12px; left:12px; right:12px; background: rgba(230,57,70,0.92); color:#fff; padding:8px 10px; border-radius:12px; text-align:center; z-index:4; font:700 12px var(--font-body); }
         .ar-video-controls{ display:flex; gap:10px; align-items:center; justify-content:space-between; padding:12px; background:#fff; border-radius: 0 0 var(--radius-lg) var(--radius-lg); flex-wrap:wrap; }
+        .ar-scale{ display:flex; flex-direction:column; gap:6px; align-items:center; background: var(--color-cream-dark); padding:10px 12px; border-radius:12px; margin:10px 0; }
+        .ar-scale--entry{ margin:10px 0; }
+        .ar-scale-row{ display:flex; align-items:center; gap:8px; }
+        .ar-scale-label{ font:700 11px var(--font-body); color: var(--color-chocolate); }
+        .ar-scale-val{ font:700 12px var(--font-mono); color: var(--color-chocolate); min-width:36px; text-align:center; }
+        .ar-scale-hint{ font:500 10px var(--font-mono); color: rgba(58,42,26,0.5); text-align:center; }
+        .ar-scale--video{ background: rgba(255,255,255,0.92); padding:8px 10px; }
+        .xr-overlay{ position:fixed; inset:0; pointer-events:none; display:flex; flex-direction:column; justify-content:flex-end; padding:16px; z-index:10; }
+        .xr-place-ui{ display:flex; flex-direction:column; align-items:center; gap:12px; pointer-events:auto; margin-bottom:24px; }
+        .xr-placed-ui{ display:flex; flex-direction:column; align-items:center; gap:12px; pointer-events:auto; margin-bottom:16px; }
+        .xr-card{ background: rgba(0,0,0,0.72); color:#fff; padding:12px 16px; border-radius:16px; text-align:center; backdrop-filter:blur(8px); border:1px solid rgba(255,255,255,0.12); max-width:320px; }
+        .xr-card--small{ padding:8px 12px; font-size:12px; }
+        .xr-card-title{ font:800 14px var(--font-display); margin:0; }
+        .xr-card-sub{ font:500 12px var(--font-body); opacity:0.8; margin-top:2px; }
+        .xr-badge{ padding:8px 14px; border-radius:999px; font:700 12px var(--font-body); color:#fff; text-align:center; }
+        .xr-badge--success{ background:#22c55e; border:1px solid rgba(255,255,255,0.2); }
+        .xr-badge--warn{ background:#f59e0b; border:1px solid rgba(255,255,255,0.2); }
+        .xr-hint{ font:500 11px var(--font-mono); color:rgba(255,255,255,0.7); text-align:center; max-width:280px; }
+        .xr-controls{ display:flex; flex-direction:column; gap:8px; align-items:center; width:100%; }
+        .xr-scale{ display:flex; align-items:center; gap:8px; background: rgba(0,0,0,0.6); padding:6px 10px; border-radius:999px; color:#fff; backdrop-filter:blur(8px); border:1px solid rgba(255,255,255,0.1); }
+        .xr-scale .xr-scale-label{ color:#fff; opacity:0.9; }
+        .xr-scale .xr-scale-val{ color:#fff; }
+        .xr-actions{ display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+        .xr-btn{ min-width:200px; justify-content:center; }
         .reticle{ width:80px; height:80px; border:2px solid #fff; border-radius:50%; position:absolute; box-shadow: 0 0 0 1px rgba(0,0,0,0.2), 0 2px 12px rgba(0,0,0,0.3); z-index:2; left:50%; top:50%; transform:translate(-50%,-50%); }
         .reticle::before{ content:''; position:absolute; inset:18px; border:1px solid rgba(255,255,255,0.9); border-radius:50%; }
         .reticle::after{ content:''; position:absolute; top:50%; left:50%; width:6px; height:6px; background:#fff; border-radius:50%; transform: translate(-50%,-50%); }
